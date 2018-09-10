@@ -30,7 +30,7 @@ type Tile struct {
 	Type TileType
 }
 
-const GridWidth, GridHeight = 80, 60
+const GridWidth, GridHeight = 20, 20
 const TileSize = 20
 
 const winWidth, winHeight int32 = GridWidth * TileSize, GridHeight * TileSize
@@ -45,41 +45,95 @@ const (
 )
 
 type Actor struct {
-	Type ActorType
-	X    int32
-	Y    int32
+	Type  ActorType
+	X     int32
+	Y     int32
+	DestX int32
+	DestY int32
+}
+
+type Pair struct {
+	X int32
+	Y int32
+}
+
+func MoveCar(a *Actor, state *GameState) bool {
+	type pairs struct {
+		initial   Pair
+		potential Pair
+		path      []Pair
+	}
+	queue := []pairs{}
+	dirs := []Pair{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}
+	for _, d := range dirs {
+		queue = append(queue, pairs{
+			Pair{-1, -1},
+			Pair{a.X + d.X, a.Y + d.Y},
+			[]Pair{Pair{a.X + d.X, a.Y + d.Y}},
+		})
+	}
+	seen := map[Pair]struct{}{}
+
+	for len(queue) > 0 {
+		next := queue[0]
+		queue = queue[1:]
+
+		if _, ok := seen[next.potential]; ok {
+			continue
+		} else {
+			seen[next.potential] = struct{}{}
+		}
+
+		if next.potential.X == a.DestX && next.potential.Y == a.DestY &&
+			state.Grid[next.potential.X][next.potential.Y].Type == road {
+			// Move actor
+			if next.initial.X == -1 {
+				a.X, a.Y = a.DestX, a.DestY
+				return true
+			}
+			a.X, a.Y = next.initial.X, next.initial.Y
+			return true
+		}
+
+		if next.potential.X >= 0 && next.potential.X < GridWidth &&
+			next.potential.Y >= 0 && next.potential.Y < GridHeight &&
+			state.Grid[next.potential.X][next.potential.Y].Type == road {
+
+			var initial Pair
+			if next.initial.X == -1 {
+				initial = next.potential
+			} else {
+				initial = next.initial
+			}
+
+			for _, d := range dirs {
+				queue = append(queue, pairs{
+					initial,
+					Pair{next.potential.X + d.X, next.potential.Y + d.Y},
+					append(next.path[:], next.potential),
+				})
+			}
+
+		}
+	}
+	return false
 }
 
 func TakeAction(a *Actor, state *GameState) bool {
 	var update bool
 	switch a.Type {
 	case car:
-		dir := rand.Intn(4)
-		switch dir {
-		case 0: // up
-			if a.Y-1 >= 0 &&
-				state.Grid[a.X][a.Y-1].Type == road {
-				a.Y--
-				update = true
-			}
-		case 1: // down
-			if a.Y+1 < GridHeight &&
-				state.Grid[a.X][a.Y+1].Type == road {
-				a.Y++
-				update = true
-			}
-		case 2: // left
-			if a.X-1 >= 0 &&
-				state.Grid[a.X-1][a.Y].Type == road {
-				a.X--
-				update = true
-			}
-		case 3: // right
-			if a.X+1 < GridWidth &&
-				state.Grid[a.X+1][a.Y].Type == road {
-				a.X++
-				update = true
-			}
+		if a.DestX == -1 ||
+			(a.X == a.DestX && a.Y == a.DestY) {
+			// Pick new destination
+			a.DestX = int32(rand.Intn(GridWidth))
+			a.DestY = int32(rand.Intn(GridHeight))
+
+			update = true
+		}
+
+		if MoveCar(a, state) {
+			update = true
 		}
 	}
 	return update
@@ -102,7 +156,7 @@ func handleMouseButtonEvent(state *GameState, event *sdl.MouseButtonEvent) (bool
 	if event.Button == sdl.BUTTON_RIGHT {
 		if state.Grid[x][y].Type == road {
 			// TODO: Collision
-			state.Actors = append(state.Actors, &Actor{car, int32(x), int32(y)})
+			state.Actors = append(state.Actors, &Actor{car, int32(x), int32(y), -1, -1})
 		}
 	}
 	return true, nil
@@ -144,6 +198,7 @@ func drawState(state *GameState, surface *sdl.Surface) {
 	for _, a := range state.Actors {
 		switch a.Type {
 		case car:
+			// Fill car
 			tileRect := sdl.Rect{a.X * TileSize, a.Y * TileSize, TileSize, TileSize}
 			surface.FillRect(&tileRect, red)
 			carRect := sdl.Rect{
@@ -153,6 +208,15 @@ func drawState(state *GameState, surface *sdl.Surface) {
 				TileSize - TileSize/2,
 			}
 			surface.FillRect(&carRect, black)
+
+			// Fill dest
+			destRect := sdl.Rect{
+				a.DestX*TileSize + TileSize/4,
+				a.DestY*TileSize + TileSize/4,
+				TileSize - TileSize/2,
+				TileSize - TileSize/2,
+			}
+			surface.FillRect(&destRect, white)
 
 		}
 	}
@@ -181,10 +245,13 @@ func run() error {
 	drawState(state, surface)
 	window.UpdateSurface()
 
+	frameCount := uint32(0)
+
 	fps := uint32(20)
 
 	running := true
 	for running {
+		frameCount++
 		beginTick := sdl.GetTicks()
 		var update bool
 
@@ -206,9 +273,12 @@ func run() error {
 			}
 		}
 
-		for _, a := range state.Actors {
-			if TakeAction(a, state) {
-				update = true
+		if frameCount%(fps/3) == 0 {
+
+			for _, a := range state.Actors {
+				if TakeAction(a, state) {
+					update = true
+				}
 			}
 		}
 
